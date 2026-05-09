@@ -1,0 +1,49 @@
+# Core
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.0
+pydantic-settings>=2.0
+
+# LangChain / LangGraph
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-groq>=0.2.0
+langchain-community>=0.3.0
+langchain-huggingface>=0.1.0
+langgraph>=0.4.0
+langgraph-checkpoint-postgres>=2.0.0
+langsmith>=0.2.0
+
+# Database
+sqlalchemy[asyncio]>=2.0
+psycopg2-binary>=2.9
+psycopg[binary]>=3.1
+asyncpg>=0.29
+
+# Redis
+redis>=5.0
+
+# HTTP client (LangSmith feedback API)
+httpx>=0.27.0
+
+# ML/Embeddings
+sentence-transformers>=3.0
+numpy>=1.24
+tiktoken>=0.7.0
+
+# Evaluation & Safety
+ragas>=0.2.0
+guardrails-ai>=0.5.0
+guardrails-hub-types>=0.0.1
+datasets>=2.0
+
+# Observability
+structlog>=24.0
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-exporter-otlp-proto-http>=1.20.0
+
+# Utilities
+python-dotenv>=1.0
+httpx>=0.27.0
+

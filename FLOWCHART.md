@@ -1,0 +1,176 @@
+﻿# Flowchart - GraphChainSQL v7.0
+
+## Dual Pipeline Decision Flow
+
+```
+POST /api/query
+       |
+       v
+ ┌─────────────────┐
+ │ INTENT DETECTOR │  ← keyword scan (fast) + LLM fallback
+ └────────┬────────┘
+          |
+    ┌─────┴──────┐
+    |             |
+  "read"       "action"
+    |             |
+    v             v
+┌───────┐   ┌─────────────────────────────────────────┐
+│PHASE 1│   │          ReAct LOOP (max 5 steps)        │
+│Parallel│  │                                          │
+│ Init  │   │  ┌──────────────────────────────────┐   │
+└───┬───┘   │  │ LLM THINKS:                      │   │
+    |        │  │  action = "call_tool" | "done"   │   │
+    v        │  └─────────────┬────────────────────┘   │
+┌──────────┐ │               |                         │
+│Complexity│ │      "call_tool" branch:                │
+│Detector  │ │               |                         │
+└────┬─────┘ │  ┌────────────v─────────────────────┐  │
+     |        │  │  interrupt() ← HITL PAUSE        │  │
+     v        │  │  POST /api/action/approve        │  │
+┌──────────┐  │  │  { approved: bool, feedback }    │  │
+│Ambiguity │  │  └────────────┬─────────────────────┘  │
+│  Agent   │  │               |                         │
+└────┬─────┘  │     approved? yes/no                    │
+     |         │               |                         │
+     v        │  ┌────────────v─────────────────────┐  │
+┌──────────┐  │  │ EXECUTE TOOL                     │  │
+│ Cache L2 │  │  │  create_po(product_id, qty)       │  │
+└────┬─────┘  │  │  notify_supplier(supplier_id)    │  │
+     |         │  │  update_shipment(id, status)     │  │
+     v        │  │  call_erp_sync(order_ids)         │  │
+┌──────────┐  │  └────────────┬─────────────────────┘  │
+│ Schema   │  │               |                         │
+│Retriever │  │   add to react_steps, loop back         │
+└────┬─────┘  │               |                         │
+     |         │      "done" branch:                     │
+     v        │               |                         │
+┌──────────┐  │  ┌────────────v─────────────────────┐  │
+│SQL Gen+  │  │  │  react_result = final summary    │  │
+│Validate  │  │  │  status = "completed"             │  │
+└────┬─────┘  │  └──────────────────────────────────┘  │
+     |         └─────────────────────────────────────────┘
+     v
+┌──────────┐
+│ APPROVAL │ ← optional HITL for SQL (require_approval=True)
+│  AGENT   │   POST /api/approve
+└────┬─────┘
+     |
+     v
+┌──────────┐
+│ SQL EXEC │
+└────┬─────┘
+     |
+     v
+┌──────────┐
+│ RESPONSE │
+└──────────┘
+```
+
+## State Machine (action pipeline)
+
+```
+status: processing ─→ react_agent (interrupt) ─→ awaiting_tool_approval
+                                   |
+                    user approves / rejects
+                                   |
+                    resume Command(approved=T/F)
+                                   |
+              approved=True ──→ execute tool ──→ processing (loop)
+                                   |                    |
+              approved=False ──→ action_rejected    "done" ──→ completed
+```
+
+## Response status values
+
+| Status                   | Meaning                                         |
+| ------------------------ | ----------------------------------------------- |
+| `processing`             | Pipeline running                                |
+| `completed`              | Read query answered OR action pipeline finished |
+| `awaiting_approval`      | SQL HITL paused (read pipeline)                 |
+| `awaiting_tool_approval` | ReAct tool HITL paused (action pipeline)        |
+| `awaiting_clarification` | Ambiguity agent needs input                     |
+| `action_rejected`        | User rejected a tool call                       |
+| `failed`                 | Error in pipeline                               |
+
+---
+
+## Feedback Loop Flow
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                     QUERY RESPONSE                            │
+│  { status: "completed", sql, result, run_id: "abc123..." }  │
+└─────────────────────────────┬────────────────────────────────┘
+                              │
+                    User clicks 👍 or 👎
+                              │
+                              v
+                ┌─────────────────────────┐
+                │  POST /api/feedback      │
+                │  {                       │
+                │    session_id,           │
+                │    query,                │
+                │    rating: +1 or -1,     │
+                │    run_id: "abc123...",  │
+                │    comment?,             │
+                │    correction?           │
+                │  }                       │
+                └────────────┬────────────┘
+                             │
+               ┌─────────────┴──────────────┐
+               │                            │
+               v                            v
+    ┌──────────────────┐       ┌─────────────────────────┐
+    │ PostgreSQL        │       │ LangSmith Feedback API  │
+    │ query_feedback    │       │ POST /feedback          │
+    │ table (local)     │       │ score: 0 or 1           │
+    └──────────────────┘       │ run_id → linked to trace │
+                               └─────────────────────────┘
+```
+
+---
+
+## Checkpointing (PostgresSaver)
+
+```
+┌────────────┐     ┌────────────┐     ┌────────────┐
+│ App Node 1 │     │ App Node 2 │     │ App Node 3 │
+└─────┬──────┘     └─────┬──────┘     └─────┬──────┘
+      │                   │                   │
+      └───────────────────┼───────────────────┘
+                          │
+                          v
+              ┌───────────────────────┐
+              │     PostgreSQL        │
+              │  checkpoint tables    │
+              │  (langgraph managed)  │
+              └───────────────────────┘
+
+• Any instance can resume an interrupted HITL graph
+• State survives crashes / restarts
+• Replaces in-memory MemorySaver (v6)
+```
+
+---
+
+## Prompt Loading (Zero Hardcoding)
+
+```
+Agent Node starts
+       │
+       v
+┌─────────────────────────┐
+│ prompts.get_prompt(name) │ ← loads from prompt_template table
+└────────────┬────────────┘
+             │
+       ┌─────┴──────┐
+       │             │
+    found          not found
+       │             │
+       v             v
+  Use prompt    Log ERROR + graceful degrade
+  from DB       (skip step / fail fast)
+                NO fallback string in code
+```
+

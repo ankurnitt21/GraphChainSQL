@@ -1,0 +1,568 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GraphChainSQL - Multi-Agent Text-to-SQL + ReAct Actions</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .chat-container {
+        height: calc(100vh - 230px);
+      }
+      pre {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+      .typing-dots::after {
+        content: '...';
+        animation: dots 1.5s infinite;
+      }
+      @keyframes dots {
+        0%,
+        20% {
+          content: '.';
+        }
+        40% {
+          content: '..';
+        }
+        60%,
+        100% {
+          content: '...';
+        }
+      }
+      .agent-badge {
+        font-size: 0.65rem;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+      .stream-step {
+        border-left: 3px solid #4a90d9;
+        padding-left: 8px;
+        margin: 4px 0;
+      }
+      .react-step {
+        border-left: 3px solid #f59e0b;
+        padding-left: 8px;
+        margin: 4px 0;
+      }
+      .tool-approval-card {
+        border: 2px solid #f59e0b;
+        border-radius: 8px;
+        padding: 12px;
+        background: rgba(245, 158, 11, 0.08);
+      }
+    </style>
+  </head>
+  <body class="bg-gray-900 text-gray-100 font-sans">
+    <div class="max-w-5xl mx-auto p-4">
+      <header class="flex items-center justify-between mb-4">
+        <div>
+          <h1 class="text-2xl font-bold text-blue-400">GraphChainSQL</h1>
+          <span class="text-xs text-gray-500">LangGraph v7 · Intent Detection · ReAct Actions · Human-in-the-Loop</span>
+        </div>
+        <div class="flex gap-3 items-center">
+          <label class="flex items-center gap-1 text-xs text-gray-400">
+            <input type="checkbox" id="streamMode" checked class="rounded" /> Stream
+          </label>
+          <label class="flex items-center gap-1 text-xs text-gray-400">
+            <input type="checkbox" id="approvalMode" class="rounded" /> SQL Approval
+          </label>
+          <span id="intentBadge" class="hidden text-xs px-2 py-1 rounded font-bold"></span>
+        </div>
+      </header>
+
+      <div id="chat" class="chat-container overflow-y-auto space-y-3 p-4 bg-gray-800 rounded-lg border border-gray-700">
+        <div class="text-center text-gray-500 text-sm py-8">
+          <p class="font-medium text-gray-400">Two pipelines — one interface</p>
+          <p class="mt-1">Read: "Show top 5 products by price" goes to SQL DAG</p>
+          <p class="mt-1">Action: "Create a PO for product 5, qty 100" goes to ReAct Agent</p>
+          <p class="mt-3 text-xs text-gray-600">Human approval required before every tool execution</p>
+        </div>
+      </div>
+
+      <div class="mt-3 flex gap-2">
+        <input
+          id="input"
+          type="text"
+          placeholder="Ask a question or give an action command..."
+          class="flex-1 px-4 py-3 bg-gray-800 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500"
+          onkeydown="if (event.key === 'Enter') sendQuery();" />
+        <button
+          onclick="sendQuery()"
+          class="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors">
+          Send
+        </button>
+      </div>
+
+      <div class="mt-2 flex gap-2 flex-wrap items-center">
+        <span class="text-xs text-blue-400 font-semibold">Read:</span>
+        <button
+          onclick="setQuery('Show me top 5 products by unit price')"
+          class="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded">
+          Top products
+        </button>
+        <button
+          onclick="setQuery('What is the current inventory level for each warehouse zone?')"
+          class="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded">
+          Inventory by zone
+        </button>
+        <button
+          onclick="setQuery('Which suppliers have the best rating?')"
+          class="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded">
+          Top suppliers
+        </button>
+        <button
+          onclick="setQuery('Show me all pending sales orders')"
+          class="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded">
+          Pending orders
+        </button>
+      </div>
+      <div class="mt-1 flex gap-2 flex-wrap items-center">
+        <span class="text-xs text-amber-400 font-semibold">Action:</span>
+        <button
+          onclick="setQuery('Create a purchase order for product 1, quantity 50')"
+          class="text-xs px-3 py-1 bg-amber-900 hover:bg-amber-800 rounded">
+          Create PO
+        </button>
+        <button
+          onclick="setQuery('Notify supplier 1 about upcoming order requirements')"
+          class="text-xs px-3 py-1 bg-amber-900 hover:bg-amber-800 rounded">
+          Notify supplier
+        </button>
+        <button
+          onclick="setQuery('Update shipment 1 status to SHIPPED')"
+          class="text-xs px-3 py-1 bg-amber-900 hover:bg-amber-800 rounded">
+          Update shipment
+        </button>
+        <button
+          onclick="setQuery('Sync sales orders 1 and 2 with ERP system')"
+          class="text-xs px-3 py-1 bg-amber-900 hover:bg-amber-800 rounded">
+          ERP sync
+        </button>
+        <button
+          onclick="setQuery('Create a PO for product 2 with qty 100 then notify the supplier')"
+          class="text-xs px-3 py-1 bg-purple-900 hover:bg-purple-800 rounded">
+          Multi-step
+        </button>
+      </div>
+    </div>
+
+    <script>
+      let sessionId = null;
+      let currentStreamSteps = null;
+      let currentStreamResult = null;
+
+      function setQuery(q) {
+        document.getElementById('input').value = q;
+      }
+
+      function showIntentBadge(intent) {
+        var badge = document.getElementById('intentBadge');
+        badge.classList.remove('hidden', 'bg-blue-700', 'bg-amber-700', 'text-white');
+        if (intent === 'action') {
+          badge.textContent = 'ACTION';
+          badge.className = 'text-xs px-2 py-1 rounded font-bold bg-amber-700 text-white';
+        } else if (intent === 'read') {
+          badge.textContent = 'READ';
+          badge.className = 'text-xs px-2 py-1 rounded font-bold bg-blue-700 text-white';
+        } else {
+          badge.classList.add('hidden');
+        }
+      }
+
+      function addMessage(role, contentHtml, extraHtml) {
+        var chat = document.getElementById('chat');
+        var div = document.createElement('div');
+        var isUser = role === 'user';
+        div.className = 'flex ' + (isUser ? 'justify-end' : 'justify-start');
+        var html = '<div class="max-w-[85%] px-4 py-3 rounded-lg ' + (isUser ? 'bg-blue-600' : 'bg-gray-700') + '">';
+        html += '<div class="text-sm">' + contentHtml + '</div>';
+        if (extraHtml) html += '<div class="mt-2 text-xs text-gray-300">' + extraHtml + '</div>';
+        html += '</div>';
+        div.innerHTML = html;
+        chat.appendChild(div);
+        chat.scrollTop = chat.scrollHeight;
+        return div;
+      }
+
+      function addStreamContainer() {
+        var chat = document.getElementById('chat');
+        var div = document.createElement('div');
+        div.className = 'flex justify-start';
+        var inner = document.createElement('div');
+        inner.className = 'max-w-[85%] px-4 py-3 rounded-lg bg-gray-700 w-full';
+        var header = document.createElement('div');
+        header.className = 'text-xs text-gray-400 mb-2';
+        header.textContent = 'Pipeline execution:';
+        var stepsDiv = document.createElement('div');
+        var resultDiv = document.createElement('div');
+        inner.appendChild(header);
+        inner.appendChild(stepsDiv);
+        inner.appendChild(resultDiv);
+        div.appendChild(inner);
+        chat.appendChild(div);
+        chat.scrollTop = chat.scrollHeight;
+        currentStreamSteps = stepsDiv;
+        currentStreamResult = resultDiv;
+        return div;
+      }
+
+      function addStreamStep(node, data) {
+        var steps = currentStreamSteps;
+        if (!steps) return;
+        var colors = {
+          intent_detector: 'text-amber-400',
+          react_agent: 'text-amber-300',
+          parallel_init: 'text-purple-400',
+          complexity_detector: 'text-indigo-400',
+          schema_retriever: 'text-cyan-400',
+          sql_generator: 'text-green-400',
+          sql_validator: 'text-orange-400',
+          sql_executor: 'text-blue-400',
+          response_synthesizer: 'text-pink-400'
+        };
+        var color = colors[node] || 'text-gray-400';
+        var detail = '';
+        if (data.intent) detail = 'intent: ' + data.intent;
+        if (data.sql) detail = 'SQL generated';
+        if (data.result_count != null) detail = data.result_count + ' rows';
+        if (data.error) detail = 'error: ' + data.error;
+        var step = document.createElement('div');
+        step.className = 'stream-step text-xs mb-1';
+        step.innerHTML = '<span class="agent-badge bg-gray-600 ' + color + '">' + node + '</span> ' + detail;
+        steps.appendChild(step);
+        document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+      }
+
+      function renderReactSteps(steps) {
+        if (!steps || !steps.length) return '';
+        var html = '<div class="mt-2 space-y-2">';
+        steps.forEach(function (s) {
+          var ok = s.success !== false;
+          var icon = s.approved ? (ok ? 'OK' : 'FAIL') : 'REJECTED';
+          html +=
+            '<div class="react-step text-xs"><div class="flex items-center gap-1 font-semibold"><span class="text-amber-300">Step ' +
+            s.step +
+            ':</span><span class="text-white ml-1">' +
+            s.tool +
+            '</span><span class="text-gray-400 ml-1">(' +
+            JSON.stringify(s.args) +
+            ')</span><span class="ml-1 text-xs px-1 rounded ' +
+            (ok && s.approved ? 'bg-green-800 text-green-200' : 'bg-red-800 text-red-200') +
+            '">' +
+            icon +
+            '</span></div><div class="text-gray-300 mt-1 pl-2">' +
+            (s.message || '') +
+            '</div></div>';
+        });
+        html += '</div>';
+        return html;
+      }
+
+      function renderToolApprovalCard(pending, steps) {
+        if (!pending) return '<div class="text-amber-400">Waiting for tool decision...</div>';
+        var argsStr = JSON.stringify(pending.tool_args || {}, null, 2);
+        var stepsHtml = steps && steps.length ? renderReactSteps(steps) : '';
+        var feedbackId = 'feedback-' + Date.now();
+        return (
+          '<div class="tool-approval-card">' +
+          '<div class="text-amber-400 font-bold text-sm mb-2">ReAct Agent wants to execute a tool</div>' +
+          '<div class="text-xs text-gray-400 mb-1">Step ' +
+          pending.step +
+          ' of ' +
+          pending.max_steps +
+          '</div>' +
+          '<div class="mb-2"><span class="text-gray-400 text-xs">Tool:</span><span class="text-amber-300 font-mono font-bold ml-1">' +
+          pending.tool_name +
+          '</span></div>' +
+          '<div class="mb-2"><span class="text-gray-400 text-xs">Arguments:</span><pre class="mt-1 p-2 bg-gray-800 rounded text-xs text-green-300">' +
+          argsStr +
+          '</pre></div>' +
+          '<div class="mb-3"><span class="text-gray-400 text-xs">Reasoning:</span><div class="text-gray-200 text-xs mt-1 pl-2 border-l-2 border-amber-600">' +
+          (pending.reasoning || '') +
+          '</div></div>' +
+          stepsHtml +
+          '<div class="mt-3">' +
+          '<input id="' +
+          feedbackId +
+          '" type="text" placeholder="Optional rejection reason..." class="w-full px-3 py-1 bg-gray-800 border border-gray-600 rounded text-xs text-gray-200 focus:outline-none focus:border-amber-500 mb-2" />' +
+          '<div class="flex gap-2 mt-1">' +
+          '<button onclick="sendToolApproval(true,\'' +
+          feedbackId +
+          '\')" class="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 rounded text-sm font-medium">Approve and Execute</button>' +
+          '<button onclick="sendToolApproval(false,\'' +
+          feedbackId +
+          '\')" class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-sm font-medium">Reject</button>' +
+          '</div></div></div>'
+        );
+      }
+
+      async function sendQuery() {
+        var input = document.getElementById('input');
+        var query = input.value.trim();
+        if (!query) return;
+        input.value = '';
+        sessionId = null;
+        addMessage('user', query);
+        showIntentBadge(null);
+        var useStream = document.getElementById('streamMode').checked;
+        var requireApproval = document.getElementById('approvalMode').checked;
+        if (useStream) {
+          await sendStreamQuery(query, requireApproval);
+        } else {
+          await sendNormalQuery(query, requireApproval);
+        }
+      }
+
+      async function sendNormalQuery(query, requireApproval) {
+        var loadDiv = addMessage('assistant', '<span class="typing-dots">Thinking</span>');
+        try {
+          var res = await fetch('/api/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: query, session_id: sessionId, require_approval: requireApproval })
+          });
+          var data = await res.json();
+          loadDiv.remove();
+          sessionId = data.session_id;
+          if (data.intent) showIntentBadge(data.intent);
+          handleResponse(data);
+        } catch (e) {
+          loadDiv.remove();
+          addMessage('assistant', 'Error: ' + e.message);
+        }
+      }
+
+      async function sendStreamQuery(query, requireApproval) {
+        addStreamContainer();
+        try {
+          var res = await fetch('/api/query/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: query, session_id: sessionId, require_approval: requireApproval })
+          });
+          var reader = res.body.getReader();
+          var decoder = new TextDecoder();
+          var buffer = '';
+          while (true) {
+            var chunk = await reader.read();
+            if (chunk.done) break;
+            buffer += decoder.decode(chunk.value, { stream: true });
+            var lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i];
+              if (line.startsWith('data: ')) {
+                try {
+                  var data = JSON.parse(line.slice(6));
+                  // Capture session_id from any event that carries it
+                  if (data.session_id) sessionId = data.session_id;
+                  if (data.intent) showIntentBadge(data.intent);
+                  if (data.node === 'session_init') {
+                    // just sets sessionId above, no visual
+                  } else if (data.node === 'complete') {
+                    if (data.result && data.result.session_id) sessionId = data.result.session_id;
+                    handleStreamResult(data.result);
+                  } else if (data.node === 'tool_approval_required') {
+                    handleResponse({
+                      status: 'awaiting_tool_approval',
+                      pending_tool_call: data.pending_tool_call,
+                      react_steps: data.react_steps || [],
+                      original_query: data.original_query || ''
+                    });
+                  } else if (data.node === 'approval_required') {
+                    handleResponse({
+                      status: 'awaiting_approval',
+                      generated_sql: data.sql,
+                      confidence: data.confidence,
+                      tables_used: data.tables_used,
+                      original_query: data.original_query || ''
+                    });
+                  } else if (data.node === 'error') {
+                    addStreamStep('error', data);
+                  } else {
+                    addStreamStep(data.node, data);
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+        } catch (e) {
+          addStreamStep('error', { error: e.message });
+        }
+      }
+
+      function handleStreamResult(data) {
+        var resultDiv = currentStreamResult;
+        if (!resultDiv || !data) return;
+        var html = '';
+        if (data.intent) showIntentBadge(data.intent);
+        if (data.react_result) html += '<div class="text-sm mt-2 text-amber-200">' + data.react_result + '</div>';
+        if (data.react_steps && data.react_steps.length) html += renderReactSteps(data.react_steps);
+        if (data.explanation) html += '<div class="text-sm mt-2">' + data.explanation + '</div>';
+        if (data.generated_sql)
+          html += '<pre class="mt-2 p-2 bg-gray-800 rounded text-xs text-green-400">' + data.generated_sql + '</pre>';
+        if (data.results && data.results.length > 0) {
+          html += '<div class="text-xs mt-1">' + data.results.length + ' rows</div>';
+          html += renderTable(data.results.slice(0, 10));
+        }
+        if (data.cache_hit) html += '<span class="text-yellow-400 text-xs">From cache</span>';
+        if (data.error) html += '<div class="text-red-400 text-sm mt-2">' + data.error + '</div>';
+        resultDiv.innerHTML = html;
+      }
+
+      function handleResponse(data) {
+        if (data.status === 'completed') {
+          var content = '';
+          var extra = '';
+          if (data.react_result) content = '<div class="text-amber-200">' + data.react_result + '</div>';
+          if (data.react_steps && data.react_steps.length) extra += renderReactSteps(data.react_steps);
+          if (!data.react_result && data.explanation) content = data.explanation;
+          if (data.generated_sql)
+            extra +=
+              '<pre class="mt-2 p-2 bg-gray-800 rounded text-xs text-green-400">' + data.generated_sql + '</pre>';
+          if (data.results && data.results.length > 0) {
+            extra += '<div class="mt-2 text-xs">' + data.results.length + ' rows</div>';
+            extra += renderTable(data.results.slice(0, 10));
+          }
+          if (data.cache_hit) extra += '<span class="text-yellow-400 text-xs">From cache</span>';
+          addMessage('assistant', content || 'Done.', extra);
+        } else if (data.status === 'action_rejected') {
+          var content = '<span class="text-orange-400">Action stopped.</span>';
+          var extra = '';
+          if (data.react_steps && data.react_steps.length) extra = renderReactSteps(data.react_steps);
+          if (data.react_result) content += '<div class="text-gray-300 mt-1">' + data.react_result + '</div>';
+          addMessage('assistant', content, extra);
+        } else if (data.status === 'awaiting_tool_approval') {
+          addMessage('assistant', renderToolApprovalCard(data.pending_tool_call, data.react_steps));
+        } else if (data.status === 'awaiting_clarification') {
+          var content = data.clarification_message || 'Could you clarify?';
+          if (data.clarification_options) {
+            content += '<div class="mt-2 space-y-1">';
+            data.clarification_options.forEach(function (opt) {
+              content +=
+                '<button onclick="sendClarification(\'' +
+                opt.query.replace(/'/g, "\\'") +
+                '\')" class="block w-full text-left px-3 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm">' +
+                opt.index +
+                '. ' +
+                opt.query +
+                '</button>';
+            });
+            content += '</div>';
+          }
+          addMessage('assistant', content);
+        } else if (data.status === 'awaiting_approval') {
+          var content =
+            '<div class="text-gray-300 mb-1">SQL requires approval (confidence: ' +
+            ((data.confidence || 0) * 100).toFixed(0) +
+            '%):</div>';
+          content +=
+            '<pre class="mt-1 p-2 bg-gray-800 rounded text-xs text-green-400">' + (data.generated_sql || '') + '</pre>';
+          var safeSQL = (data.generated_sql || '').replace(/'/g, "\\'").replace(/\n/g, ' ');
+          var safeQ = (data.original_query || '').replace(/'/g, "\\'");
+          content +=
+            '<div class="mt-2 flex gap-2"><button onclick="sendApproval(true,\'' +
+            safeSQL +
+            "','" +
+            safeQ +
+            '\')" class="px-4 py-2 bg-green-600 hover:bg-green-700 rounded text-sm">Approve SQL</button><button onclick="sendApproval(false)" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-sm">Reject</button></div>';
+          addMessage('assistant', content);
+        } else if (data.status === 'failed') {
+          addMessage('assistant', '<span class="text-red-400">' + (data.error || 'Query failed') + '</span>');
+        }
+      }
+
+      function renderTable(rows) {
+        if (!rows.length) return '';
+        var keys = Object.keys(rows[0]);
+        var html = '<div class="overflow-x-auto mt-2"><table class="text-xs border-collapse w-full">';
+        html +=
+          '<tr>' +
+          keys
+            .map(function (k) {
+              return '<th class="border border-gray-600 px-2 py-1 bg-gray-700">' + k + '</th>';
+            })
+            .join('') +
+          '</tr>';
+        rows.forEach(function (row) {
+          html +=
+            '<tr>' +
+            keys
+              .map(function (k) {
+                return '<td class="border border-gray-600 px-2 py-1">' + (row[k] != null ? row[k] : '') + '</td>';
+              })
+              .join('') +
+            '</tr>';
+        });
+        html += '</table></div>';
+        return html;
+      }
+
+      async function sendClarification(query) {
+        addMessage('user', query);
+        var loadDiv = addMessage('assistant', '<span class="typing-dots">Processing</span>');
+        try {
+          var res = await fetch('/api/clarify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId, custom_query: query })
+          });
+          var data = await res.json();
+          loadDiv.remove();
+          handleResponse(data);
+        } catch (e) {
+          loadDiv.remove();
+          addMessage('assistant', 'Error: ' + e.message);
+        }
+      }
+
+      async function sendApproval(approved, sql, query) {
+        var loadDiv = addMessage('assistant', '<span class="typing-dots">Executing SQL</span>');
+        try {
+          var res = await fetch('/api/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: sessionId,
+              approved: approved,
+              generated_sql: sql || '',
+              original_query: query || ''
+            })
+          });
+          var data = await res.json();
+          loadDiv.remove();
+          handleResponse(data);
+        } catch (e) {
+          loadDiv.remove();
+          addMessage('assistant', 'Error: ' + e.message);
+        }
+      }
+
+      async function sendToolApproval(approved, feedbackInputId) {
+        var feedback = feedbackInputId
+          ? document.getElementById(feedbackInputId)
+            ? document.getElementById(feedbackInputId).value
+            : ''
+          : '';
+        var loadDiv = addMessage('assistant', '<span class="typing-dots">Processing tool decision</span>');
+        try {
+          var res = await fetch('/api/action/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId, approved: approved, feedback: feedback })
+          });
+          var data = await res.json();
+          loadDiv.remove();
+          if (data.session_id) sessionId = data.session_id;
+          if (data.intent) showIntentBadge(data.intent);
+          handleResponse(data);
+        } catch (e) {
+          loadDiv.remove();
+          addMessage('assistant', 'Error: ' + e.message);
+        }
+      }
+    </script>
+  </body>
+</html>
+
