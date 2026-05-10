@@ -205,3 +205,11 @@ On update:
 Delete old chunks from Pinecone using stored chunk IDs
 Re-ingest fresh chunks
 Update version record in PostgreSQL
+
+5. Granular vs Full Chunk Replacement
+
+Replacing only changed chunks sounds efficient but chunking is non-deterministic
+Can't reliably map old chunks to new chunks
+Delete all + re-ingest is safer and simpler
+Cost is negligible (~0.2 cents per typical PDF)
+Granular replacement only works for structured PDFs with fixed section boundaries
