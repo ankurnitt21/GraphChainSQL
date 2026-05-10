@@ -213,3 +213,7 @@ Can't reliably map old chunks to new chunks
 Delete all + re-ingest is safer and simpler
 Cost is negligible (~0.2 cents per typical PDF)
 Granular replacement only works for structured PDFs with fixed section boundaries
+
+Use pdfplumber for pdf with tables
+<img width="890" height="595" alt="image" src="https://github.com/user-attachments/assets/ed17d5f0-efad-4a1a-bc0a-d8becf69313c" />
+
