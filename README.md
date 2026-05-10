@@ -177,3 +177,31 @@ State is persisted to PostgreSQL via `langgraph-checkpoint-postgres`. This enabl
 - **Crash recovery** — interrupted HITL flows survive restarts
 - **Session persistence** — conversation memory across requests
 
+2. PDF Ingestion Pipeline
+PDF uploaded → stored in S3
+Kafka sends lightweight EVENT (not PDF itself)
+Python service consumes event
+Downloads PDF from S3
+Chunks → Embeds → Upserts to Pinecone
+
+Kafka only carries metadata, not raw PDF bytes
+Kafka has 1MB default limit
+
+
+3. Deduplication
+
+Generate MD5 hash of PDF on download
+Check PostgreSQL before ingesting
+If hash exists → skip
+If new → ingest and store hash
+
+
+4. PDF Versioning (hash changed)
+
+Same filename + different hash = updated PDF
+Store chunk IDs in PostgreSQL alongside hash
+On update:
+
+Delete old chunks from Pinecone using stored chunk IDs
+Re-ingest fresh chunks
+Update version record in PostgreSQL
