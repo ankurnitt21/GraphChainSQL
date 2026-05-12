@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "GraphChainSQL Postgres",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "warehouse_db",
+      "Username": "warehouse_admin",
+      "PassFile": "/pgadmin4/pgpass",
+      "SSLMode": "prefer"
+    }
+  }
+}

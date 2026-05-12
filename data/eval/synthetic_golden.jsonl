@@ -1,0 +1,4 @@
+{"id": "simple_list", "query": "List all suppliers with rating above 4", "expect_status": "completed", "sql_must_contain": "supplier"}
+{"id": "top_n_price", "query": "Show top 5 products by unit price", "expect_status": "completed", "sql_must_contain": "product"}
+{"id": "aggregate", "query": "How many products are in the catalog?", "expect_status": "completed", "sql_must_contain": "count"}
+{"id": "join_inventory", "query": "What is the total inventory available for products in warehouse East Coast?", "expect_status": "completed", "sql_must_contain": "select"}

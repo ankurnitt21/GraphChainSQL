@@ -3,7 +3,7 @@
 import json
 import re
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from src.core import get_settings
 from src.core.state import AgentState
 from src.core.prompts import get_prompt
@@ -17,14 +17,14 @@ settings = get_settings()
 
 
 def _get_llm():
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_fast_model,
+    return ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_chat_model,
         temperature=0,
     )
 
 
-@trace_agent_node("ambiguity_agent")
+@trace_agent_node("ambiguity_agent", prompt_key="ambiguity_resolution")
 def ambiguity_agent_node(state: AgentState) -> dict:
     """Resolve ambiguity in user queries using LLM with dynamic DB prompt.
 

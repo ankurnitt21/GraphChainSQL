@@ -1,0 +1,42 @@
+# Warehouse Sales & Fulfillment Domain Knowledge
+
+## Sales Order Lifecycle
+Orders progress through status workflow:
+1. PENDING → Initial order created
+2. CONFIRMED → Payment/credit verified
+3. PICKING → Warehouse staff picking items
+4. SHIPPED → Handed to carrier
+5. DELIVERED → Confirmed delivery
+6. CANCELLED → Order cancelled
+
+## Order Priority System
+Priority affects pick sequence and shipping method:
+- LOW: Standard processing, economy shipping
+- NORMAL: Default priority, ground shipping
+- HIGH: Expedited processing, express options
+- URGENT: Immediate pick, next-day/same-day
+
+## Customer Types
+- RETAIL: Individual/small business, lower volumes
+- WHOLESALE: Bulk buyers, volume discounts
+- DISTRIBUTOR: Regional partners, highest volumes
+
+## Shipment Tracking
+Each sales order can have multiple shipments:
+- shipment_number: Internal tracking ID
+- carrier: UPS, FedEx, USPS, etc.
+- tracking_number: Carrier's tracking ID
+- Status: PENDING → IN_TRANSIT → DELIVERED
+
+## Key Sales Queries
+- "Show pending orders by priority" - fulfillment queue
+- "List orders for customer X" - customer history
+- "What's the total sales this month?" - revenue tracking
+- "Show shipped but undelivered orders" - in-transit monitoring
+- "Which orders are past required_date?" - late order alert
+
+## Sales Order Lines
+Each order contains line items with:
+- quantity_ordered: What customer requested
+- quantity_shipped: What was actually sent
+- unit_price: Price charged (may differ from product.unit_price)

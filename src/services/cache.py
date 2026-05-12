@@ -18,7 +18,7 @@ _redis: Optional[redis.Redis] = None
 _embeddings = None
 _index_created = False
 
-VECTOR_DIM = 384  # all-MiniLM-L6-v2 dimension
+VECTOR_DIM = 1536  # OpenAI text-embedding-3-small dimension
 INDEX_NAME = "idx:semantic_cache"
 PREFIX = "graphchain:vec:"
 
@@ -31,15 +31,14 @@ def _get_redis() -> redis.Redis:
 
 
 def _get_embeddings():
-    """Get embedding model for semantic similarity (lazy load)."""
+    """Get OpenAI embedding model for semantic similarity (lazy load)."""
     global _embeddings
     if _embeddings is None:
         try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-            _embeddings = HuggingFaceEmbeddings(
-                model_name="all-MiniLM-L6-v2",
-                model_kwargs={"device": "cpu"},
-                encode_kwargs={"normalize_embeddings": True},
+            from langchain_openai import OpenAIEmbeddings
+            _embeddings = OpenAIEmbeddings(
+                model=settings.openai_embedding_model,
+                openai_api_key=settings.openai_api_key,
             )
         except Exception as e:
             log.warning("embedding_model_unavailable", error=str(e))

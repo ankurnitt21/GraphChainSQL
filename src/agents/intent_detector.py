@@ -2,7 +2,7 @@
 
 import json as _json
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from src.core import get_settings
 from src.core.state import AgentState
 from src.core.prompts import get_prompt
@@ -15,14 +15,14 @@ settings = get_settings()
 
 
 def _get_fast_llm():
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_fast_model,
+    return ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_chat_model,
         temperature=0,
     )
 
 
-@trace_agent_node("intent_detector")
+@trace_agent_node("intent_detector", prompt_key="intent_detection")
 def intent_detector_node(state: AgentState) -> dict:
     """Classify user intent as 'read' or 'action' using LLM with dynamic DB prompt."""
     query = state.get("original_query", "")

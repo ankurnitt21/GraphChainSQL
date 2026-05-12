@@ -12,12 +12,15 @@ from src.api.models import QueryRequest, QueryResponse, ClarifyRequest, ApproveR
 from src.agents.pipeline import build_graph
 from src.services.cache import semantic_cache_get
 from src.core.database import save_conversation
-from src.core.tracing import get_tracer, set_pipeline_context, clear_pipeline_context
+from src.core import get_settings
+from src.core.tracing import get_tracer, set_pipeline_context, clear_pipeline_context, span_io_payload
+from src.services.ragas_service import schedule_ragas_persist
 from opentelemetry import trace
 import structlog
 
 log = structlog.get_logger()
 router = APIRouter()
+
 
 # Compiled graph singleton
 _graph = None
@@ -131,8 +134,26 @@ def query(req: QueryRequest):
 
     root_span = tracer.start_span("sql_pipeline")
     root_span.set_attribute("langsmith.span.kind", "chain")
-    root_span.set_attribute("input.value", req.query)
+    root_span.set_attribute("gen_ai.system", "openai")
+    root_span.set_attribute("gen_ai.operation.name", "chain")
+    root_span.set_attribute(
+        "input.value",
+        span_io_payload(
+            {
+                "kind": "sql_pipeline_request",
+                "session_id": session_id,
+                "query": req.query,
+                "require_approval": req.require_approval,
+            }
+        ),
+    )
+    root_span.set_attribute("gen_ai.prompt.0.role", "user")
+    root_span.set_attribute("gen_ai.prompt.0.content", req.query[:4000])
     root_span.set_attribute("session_id", session_id)
+    _s = get_settings()
+    root_span.set_attribute("app.input.primary", req.query[:2000])
+    root_span.set_attribute("app.input.sub", f"require_approval={req.require_approval}")
+    root_span.set_attribute("gen_ai.request.model", _s.openai_chat_model)
     root_ctx = trace.set_span_in_context(root_span)
     # Extract run_id (trace ID) for feedback linking in LangSmith
     run_id = format(root_span.get_span_context().trace_id, '032x')
@@ -182,15 +203,45 @@ def query(req: QueryRequest):
                         run_id=run_id,
                     )
 
-            root_span.set_attribute("output.value", (result.get("explanation") or result.get("error") or "")[:500])
+            root_span.set_attribute(
+                "output.value",
+                span_io_payload(
+                    {
+                        "kind": "sql_pipeline_response",
+                        "status": result.get("status"),
+                        "explanation": result.get("explanation"),
+                        "error": result.get("error"),
+                        "generated_sql": result.get("generated_sql"),
+                        "tables_used": result.get("tables_used"),
+                        "cache_hit": bool(result.get("cache_hit")),
+                        "l1_checked": bool(result.get("l1_checked")),
+                        "l2_hit": bool(result.get("l2_hit")),
+                        "intent": result.get("intent"),
+                        "query_complexity": result.get("query_complexity"),
+                    }
+                ),
+            )
+            root_span.set_attribute("gen_ai.completion.0.role", "assistant")
+            root_span.set_attribute(
+                "gen_ai.completion.0.content",
+                (result.get("explanation") or result.get("error") or "")[:4000],
+            )
+            root_span.set_attribute("app.output.primary", (result.get("explanation") or result.get("error") or "")[:2000])
+            root_span.set_attribute(
+                "app.output.sub",
+                f"sql={(result.get('generated_sql') or '')[:600]}|tables={result.get('tables_used')}|cache_hit={result.get('cache_hit', False)}",
+            )
             root_span.set_attribute("cache_hit", result.get("cache_hit", False))
+            root_span.set_attribute("timing.pipeline_ms", int((time.time() * 1000) - start_ms))
             root_span.set_status(trace.Status(trace.StatusCode.OK))
             root_span.end()
+            schedule_ragas_persist(session_id, run_id, result)
             return _state_to_response(result, session_id, start_ms, run_id=run_id)
         except Exception as e:
             log.error("query_pipeline_error", error=str(e))
             root_span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)[:200]))
             root_span.record_exception(e)
+            root_span.set_attribute("timing.pipeline_ms", int((time.time() * 1000) - start_ms))
             root_span.end()
             return QueryResponse(
                 session_id=session_id,
@@ -223,14 +274,33 @@ def query_stream(req: QueryRequest):
         tracer = get_tracer()
         root_span = tracer.start_span("sql_pipeline")
         root_span.set_attribute("langsmith.span.kind", "chain")
-        root_span.set_attribute("input.value", req.query)
+        root_span.set_attribute("gen_ai.system", "openai")
+        root_span.set_attribute("gen_ai.operation.name", "chain")
+        stream_run_id = format(root_span.get_span_context().trace_id, "032x")
+        root_span.set_attribute(
+            "input.value",
+            span_io_payload(
+                {
+                    "kind": "sql_pipeline_request",
+                    "session_id": session_id,
+                    "query": req.query,
+                    "require_approval": req.require_approval,
+                }
+            ),
+        )
+        root_span.set_attribute("gen_ai.prompt.0.role", "user")
+        root_span.set_attribute("gen_ai.prompt.0.content", req.query[:4000])
         root_span.set_attribute("session_id", session_id)
+        _st = get_settings()
+        root_span.set_attribute("app.input.primary", req.query[:2000])
+        root_span.set_attribute("app.input.sub", f"require_approval={req.require_approval}")
+        root_span.set_attribute("gen_ai.request.model", _st.openai_chat_model)
         root_ctx = trace.set_span_in_context(root_span)
         set_pipeline_context(session_id, root_ctx)
 
         try:
             # First event: announce session_id so client can set it before any interrupt
-            yield f"data: {json.dumps({'node': 'session_init', 'session_id': session_id})}\n\n"
+            yield f"data: {json.dumps({'node': 'session_init', 'session_id': session_id, 'run_id': stream_run_id})}\n\n"
 
             # Stream node-by-node execution
             interrupted = False
@@ -325,8 +395,37 @@ def query_stream(req: QueryRequest):
                             yield f"data: {sql_payload}\n\n"
                     else:
                         final_state = graph_state.values
-                        response = _state_to_response(final_state, session_id, time.time()*1000)
-                        root_span.set_attribute("output.value", (final_state.get("explanation") or final_state.get("error") or "")[:500])
+                        response = _state_to_response(
+                            final_state, session_id, time.time() * 1000, run_id=stream_run_id
+                        )
+                        root_span.set_attribute(
+                            "output.value",
+                            span_io_payload(
+                                {
+                                    "kind": "sql_pipeline_response",
+                                    "status": final_state.get("status"),
+                                    "explanation": final_state.get("explanation"),
+                                    "error": final_state.get("error"),
+                                    "generated_sql": final_state.get("generated_sql"),
+                                    "tables_used": final_state.get("tables_used"),
+                                    "cache_hit": bool(final_state.get("cache_hit")),
+                                    "l1_checked": bool(final_state.get("l1_checked")),
+                                    "l2_hit": bool(final_state.get("l2_hit")),
+                                    "intent": final_state.get("intent"),
+                                    "query_complexity": final_state.get("query_complexity"),
+                                }
+                            ),
+                        )
+                        root_span.set_attribute("gen_ai.completion.0.role", "assistant")
+                        root_span.set_attribute(
+                            "gen_ai.completion.0.content",
+                            (final_state.get("explanation") or final_state.get("error") or "")[:4000],
+                        )
+                        root_span.set_attribute(
+                            "app.output.primary",
+                            (final_state.get("explanation") or final_state.get("error") or "")[:2000],
+                        )
+                        schedule_ragas_persist(session_id, stream_run_id, final_state)
                         yield f"data: {json.dumps({'node': 'complete', 'status': 'done', 'result': response.model_dump()})}\n\n"
                 except Exception as e:
                     yield f"data: {json.dumps({'node': 'complete', 'status': 'done', 'error': str(e)})}\n\n"
@@ -380,6 +479,7 @@ def clarify(req: ClarifyRequest):
 
     try:
         result = graph.invoke(initial_state, config=config)
+        schedule_ragas_persist(req.session_id, None, result)
         return _state_to_response(result, req.session_id, start_ms)
     except Exception as e:
         log.error("clarify_error", error=str(e))
@@ -434,8 +534,10 @@ def approve(req: ApproveRequest):
         result = graph.invoke(Command(resume={"approved": True}), config=config)
         if root_span:
             root_span.set_attribute("output.value", (result.get("explanation") or result.get("error") or "")[:500])
+            root_span.set_attribute("timing.pipeline_ms", int((time.time() * 1000) - start_ms))
             root_span.set_status(trace.Status(trace.StatusCode.OK))
             root_span.end()
+        schedule_ragas_persist(req.session_id, None, result)
         return _state_to_response(result, req.session_id, start_ms)
     except Exception as e:
         log.error("approve_resume_error", error=str(e))
@@ -492,6 +594,7 @@ def action_approve(req: ActionApproveRequest):
                 duration_ms=int((time.time() * 1000) - start_ms),
             )
 
+        schedule_ragas_persist(req.session_id, None, result)
         return _state_to_response(result, req.session_id, start_ms)
     except Exception as e:
         log.error("action_approve_error", error=str(e))
@@ -523,10 +626,26 @@ def list_action_tools():
     return {"tools": TOOL_DESCRIPTIONS}
 
 
+@router.get("/api/ragas/recent")
+def ragas_recent(limit: int = 50):
+    """Recent persisted RAGAS scores (see ``RAGAS_COLLECT_ON_COMPLETE`` in ``.env.example``)."""
+    from src.services.ragas_service import list_recent_ragas_evals
+
+    return {"evals": list_recent_ragas_evals(limit)}
+
+
 @router.get("/health")
 async def health():
-    """Health check."""
-    return {"status": "healthy", "service": "GraphChainSQLPython", "version": "7.0.0"}
+    """Health check (includes deployment labels for load balancers / k8s probes)."""
+    from src.core import get_settings
+
+    s = get_settings()
+    return {
+        "status": "healthy",
+        "service": s.service_name,
+        "app_env": s.app_env,
+        "version": s.app_version or "0.0.0",
+    }
 
 
 # ─── Feedback Endpoints ──────────────────────────────────────────────────────

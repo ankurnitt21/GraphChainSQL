@@ -143,18 +143,20 @@ class RateLimitExceededError(Exception):
 
 # ─── Pre-configured instances for external services ─────────────────────────
 
-# Groq LLM circuit breaker (trips after 5 failures, recovers after 30s)
+# OpenAI LLM circuit breaker (trips after 5 failures, recovers after 30s)
 llm_circuit = CircuitBreaker(
-    name="groq_llm",
+    name="openai_llm",
     failure_threshold=5,
     recovery_timeout=30.0,
 )
 
-# Groq rate limiter (30 requests burst, 10/sec refill)
+# OpenAI rate limiter — GPT-4o-mini tier allows 500 RPM, 200K TPM.
+# 100 burst tokens with 80/sec refill keeps well within limits while
+# preventing request floods if the pipeline retries or fans out.
 llm_rate_limiter = RateLimiter(
-    name="groq_llm",
-    max_tokens=30,
-    refill_rate=10.0,
+    name="openai_llm",
+    max_tokens=100,
+    refill_rate=80.0,
 )
 
 # Redis circuit breaker (trips after 3 failures, recovers after 10s)

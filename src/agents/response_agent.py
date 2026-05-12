@@ -7,7 +7,7 @@ Strategy:
 
 import json
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from src.core import get_settings
 from src.core.state import AgentState
 from src.core.prompts import get_prompt
@@ -22,51 +22,72 @@ log = structlog.get_logger()
 settings = get_settings()
 
 
-def _is_simple_result(results: list[dict]) -> bool:
-    """Determine if results are simple enough for template response."""
+def _is_simple_result(results: list[dict], query_complexity: str = "moderate") -> bool:
+    """Determine if results are simple enough for a template response (no LLM).
+
+    Template is used when:
+      - No results (empty set)
+      - Single row (any column count) — e.g. aggregate/count queries
+      - query_complexity == "simple" and ≤ 10 rows — e.g. "top 5", "list all X"
+      - Up to 3 rows with a single column — simple enumeration
+    """
     if not results:
         return True
-    # Single row with 1-2 columns → simple
-    if len(results) == 1 and len(results[0]) <= 2:
+    # Single aggregate/count row — always template
+    if len(results) == 1:
         return True
-    # Up to 3 rows with 1 column → simple list
+    # Small ranked/list result when the query is already classified simple
+    if query_complexity == "simple" and len(results) <= 10:
+        return True
+    # Up to 3 single-column rows
     if len(results) <= 3 and all(len(r) == 1 for r in results):
         return True
     return False
 
 
-def _template_response(query: str, results: list[dict]) -> str:
-    """Generate a template-based response for simple results (no LLM needed)."""
+def _template_response(query: str, results: list[dict]) -> str | None:
+    """Generate a template-based response for simple results (no LLM needed).
+
+    Returns None only if the result shape is unexpectedly complex so the caller
+    can fall through to the LLM path.
+    """
     if not results:
         return "The query returned no results."
 
+    # Single aggregate row (e.g. COUNT, SUM)
     if len(results) == 1:
         row = results[0]
         if len(row) == 1:
             key, value = next(iter(row.items()))
             return f"The result is **{value}**."
-        else:
-            parts = [f"**{k}**: {v}" for k, v in row.items()]
-            return f"Result: {', '.join(parts)}."
+        parts = [f"**{k}**: {v}" for k, v in row.items()]
+        return "Result: " + ", ".join(parts) + "."
 
-    # Simple list
+    # Single-column list
     if all(len(r) == 1 for r in results):
         key = next(iter(results[0].keys()))
         values = [str(r[key]) for r in results]
         return f"Results ({len(results)} items): {', '.join(values)}."
 
-    return None  # Fallback to LLM
+    # Multi-column ranked/list result — build a compact table summary
+    cols = list(results[0].keys())
+    rows_text = []
+    for i, row in enumerate(results, 1):
+        parts = [f"{v}" for v in row.values()]
+        rows_text.append(f"{i}. " + " | ".join(parts))
+    header = " | ".join(cols)
+    return f"Top {len(results)} results ({header}):\n" + "\n".join(rows_text)
 
 
 def _get_llm():
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_fast_model,
+    return ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_chat_model,
         temperature=0,
     )
 
 
-@trace_agent_node("response_synthesizer")
+@trace_agent_node("response_synthesizer", prompt_key="response_synthesis")
 def response_synthesizer_node(state: AgentState) -> dict:
     """Convert raw SQL results into a natural language response.
 
@@ -80,11 +101,13 @@ def response_synthesizer_node(state: AgentState) -> dict:
     messages = state.get("messages", [])
     session_id = state.get("session_id", "")
 
+    query_complexity = state.get("query_complexity", "moderate")
+
     # Strategy: Template vs LLM
-    if _is_simple_result(results):
+    if _is_simple_result(results, query_complexity):
         explanation = _template_response(query, results)
         if explanation:
-            log.info("response_template", rows=len(results))
+            log.info("response_template", rows=len(results), complexity=query_complexity)
         else:
             explanation = None  # Fall through to LLM
     else:
@@ -127,8 +150,12 @@ def response_synthesizer_node(state: AgentState) -> dict:
         except Exception as e:
             explanation = f"Query returned {len(results)} rows."
 
-    # Validate output for PII
-    is_clean, pii_issues, cleaned_explanation = validate_output(explanation)
+    # Validate output for PII.
+    # Skip the expensive LLM PII guard for SQL data results — warehouse output
+    # (product names, prices, quantities) never contains personal data.
+    # Use full LLM guard only for free-text explanations from complex queries.
+    use_llm_pii = query_complexity == "complex"
+    is_clean, pii_issues, cleaned_explanation = validate_output(explanation, use_llm_pii=use_llm_pii)
     if not is_clean:
         log.warning("pii_detected_in_response", issues=pii_issues)
         explanation = cleaned_explanation

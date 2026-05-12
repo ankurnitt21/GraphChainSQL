@@ -3,7 +3,7 @@
 import json
 import re
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from src.core import get_settings
 from src.core.state import AgentState
 from src.core.prompts import get_prompt
@@ -16,14 +16,14 @@ settings = get_settings()
 
 
 def _get_llm():
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_fast_model,
+    return ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_chat_model,
         temperature=0,
     )
 
 
-@trace_agent_node("sql_generator")
+@trace_agent_node("sql_generator", prompt_key="sql_generation")
 def sql_generator_node(state: AgentState) -> dict:
     """Generate SQL from the rewritten query and retrieved schema.
 

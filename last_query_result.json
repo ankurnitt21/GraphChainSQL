@@ -1,0 +1,107 @@
+﻿{
+    "session_id":  "31bfe8b7-03c5-4af3-9262-cf9f269a629c",
+    "status":  "completed",
+    "original_query":  "List the names of all warehouses",
+    "rewritten_query":  null,
+    "generated_sql":  "SELECT name FROM warehouse LIMIT 50;",
+    "confidence":  0.75,
+    "results":  [
+                    {
+                        "name":  "East Coast Distribution Center"
+                    },
+                    {
+                        "name":  "West Coast Fulfillment Hub"
+                    },
+                    {
+                        "name":  "Central Regional Warehouse"
+                    }
+                ],
+    "explanation":  "Results (3 items): East Coast Distribution Center, West Coast Fulfillment Hub, Central Regional Warehouse.",
+    "tables_used":  [
+                        "warehouse"
+                    ],
+    "cache_hit":  false,
+    "error":  null,
+    "clarification_message":  null,
+    "clarification_options":  null,
+    "duration_ms":  12434,
+    "structured_output":  {
+                              "answer":  "Results (3 items): East Coast Distribution Center, West Coast Fulfillment Hub, Central Regional Warehouse.",
+                              "sql":  "SELECT name FROM warehouse LIMIT 50;",
+                              "raw_data":  [
+                                               {
+                                                   "name":  "East Coast Distribution Center"
+                                               },
+                                               {
+                                                   "name":  "West Coast Fulfillment Hub"
+                                               },
+                                               {
+                                                   "name":  "Central Regional Warehouse"
+                                               }
+                                           ],
+                              "total_rows":  3,
+                              "tables_used":  [
+                                                  "warehouse"
+                                              ],
+                              "confidence":  0.75,
+                              "estimated_cost":  "low",
+                              "metadata":  {
+                                               "cache_hit":  false,
+                                               "ambiguity_score":  0.0,
+                                               "rewrite_confidence":  1.0,
+                                               "validated":  true,
+                                               "query_complexity":  "simple"
+                                           }
+                          },
+    "decision_trace":  [
+                           {
+                               "node":  "parallel_init",
+                               "latency_ms":  3316.0,
+                               "outcome":  "success"
+                           },
+                           {
+                               "node":  "cache_l2",
+                               "latency_ms":  49.8,
+                               "outcome":  "success"
+                           },
+                           {
+                               "node":  "schema_retriever",
+                               "latency_ms":  1452.5,
+                               "outcome":  "success"
+                           },
+                           {
+                               "node":  "sql_generator",
+                               "latency_ms":  6901.9,
+                               "outcome":  "success",
+                               "reason":  "confidence=0.75"
+                           },
+                           {
+                               "node":  "sql_validator",
+                               "latency_ms":  3.5,
+                               "outcome":  "success"
+                           },
+                           {
+                               "node":  "approval_agent",
+                               "latency_ms":  1.0,
+                               "outcome":  "success",
+                               "reason":  "approved=True"
+                           },
+                           {
+                               "node":  "sql_executor",
+                               "latency_ms":  8.6,
+                               "outcome":  "success"
+                           },
+                           {
+                               "node":  "response_synthesizer",
+                               "latency_ms":  70.7,
+                               "outcome":  "success"
+                           }
+                       ],
+    "estimated_cost":  "low",
+    "approval_explanation":  "Retrieve data from warehouse limited to 50 rows. Confidence: 75%.",
+    "intent":  "read",
+    "react_steps":  null,
+    "react_result":  null,
+    "pending_tool_call":  null,
+    "run_id":  "b167895c9c71f28a05c5107816e3c2e9"
+}

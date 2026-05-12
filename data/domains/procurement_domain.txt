@@ -1,0 +1,47 @@
+# Warehouse Procurement & Supplier Domain Knowledge
+
+## Purchase Order Lifecycle
+POs track procurement from suppliers:
+1. DRAFT → Being prepared, not yet sent
+2. SUBMITTED → Sent to supplier
+3. CONFIRMED → Supplier confirmed availability
+4. RECEIVED → Goods arrived at warehouse
+5. CANCELLED → PO cancelled
+
+## Supplier Management
+Suppliers are rated on performance:
+- rating: 0.00 to 5.00 scale based on delivery, quality
+- lead_time_days: Expected days from order to delivery
+- Use supplier rating for vendor selection decisions
+
+## Purchase Order Lines
+Each PO has line items:
+- quantity_ordered: What we requested
+- quantity_received: What actually arrived
+- Partial receipts allowed (received < ordered)
+
+## Procurement Key Metrics
+- Cost price vs Unit price: Margin analysis
+- Lead time: Planning and buffer stock calculation
+- Supplier rating: Quality and reliability assessment
+
+## Key Procurement Queries
+- "Show open purchase orders" - pending deliveries
+- "Which suppliers have rating above 4?" - top performers
+- "List overdue POs past expected_delivery" - delays
+- "What's total spend with supplier X?" - vendor analysis
+- "Show products from supplier Y" - supplier catalog
+
+## Supplier Contact Information
+Each supplier has:
+- contact_name, email, phone for communication
+- city, country for logistics planning
+- code: Unique identifier like SUP-TECH
+
+## Receiving Process
+When goods arrive:
+1. Match to purchase_order_line
+2. Update quantity_received
+3. Create inventory_transaction (type=RECEIPT)
+4. Update inventory.quantity_on_hand
+5. If fully received, update PO status to RECEIVED

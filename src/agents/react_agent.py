@@ -17,7 +17,7 @@ HITL flow:
 import json
 import re
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langgraph.types import interrupt
 from src.core import get_settings
 from src.core.state import AgentState
@@ -65,9 +65,9 @@ IMPORTANT:
 
 
 def _get_llm():
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_chat_model,
+    return ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_chat_model,
         temperature=0,
     )
 
@@ -98,7 +98,7 @@ def _parse_llm_decision(content: str) -> dict:
     return json.loads(content)
 
 
-@trace_agent_node("react_agent")
+@trace_agent_node("react_agent", prompt_key="react_system")
 def react_agent_node(state: AgentState) -> dict:
     """Single iteration of the ReAct loop.
 

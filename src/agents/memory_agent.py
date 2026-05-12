@@ -10,7 +10,7 @@ Features:
 import re
 import numpy as np
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from src.core import get_settings
 from src.core.state import AgentState
 from src.core.database import get_conversations, get_conversation_summary, save_conversation_summary
@@ -29,9 +29,9 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _get_llm():
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_fast_model,
+    return ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_chat_model,
         temperature=0,
     )
 
@@ -144,7 +144,7 @@ def _summarize_messages(messages: list[dict], existing_summary: str) -> str:
         return existing_summary or ""
 
 
-@trace_agent_node("memory_agent")
+@trace_agent_node("memory_agent", prompt_key="memory_summarization")
 def memory_agent_node(state: AgentState) -> dict:
     """Load conversation history with relevance filtering and token-aware summarization.
 

@@ -24,11 +24,11 @@ _validators_registered = False
 
 
 def _make_llm():
-    """Instantiate the fast Groq LLM for security classification."""
-    from langchain_groq import ChatGroq
+    """Instantiate the OpenAI LLM for security classification."""
+    from langchain_openai import ChatOpenAI
     from src.core import get_settings
     s = get_settings()
-    return ChatGroq(api_key=s.groq_api_key, model=s.groq_fast_model, temperature=0)
+    return ChatOpenAI(api_key=s.openai_api_key, model=s.openai_chat_model, temperature=0)
 
 
 def _register_validators():
@@ -396,32 +396,67 @@ def validate_sql(sql: str) -> tuple[bool, list[str]]:
     return (len(issues) == 0, issues)
 
 
-def validate_output(response_text: str) -> tuple[bool, list[str], str]:
-    """Validate LLM output for PII and JSON correctness using guardrails-ai.
+# ─── Regex-only PII patterns (zero LLM overhead) ──────────────────────────
+_PII_EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+_PII_PHONE_RE = re.compile(r"\b(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b")
+_PII_SSN_RE   = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_PII_CC_RE    = re.compile(r"\b(?:\d{4}[-\s]?){3}\d{4}\b")
 
-    Two guards run in sequence:
-      1. PIIRedact (OnFailAction.FIX)  — redacts email/phone/SSN/CC, returns cleaned text
-      2. JsonFormatCheck (OnFailAction.EXCEPTION) — only if output looks like JSON
+
+def _regex_pii_check(text: str) -> tuple[bool, str]:
+    """Fast regex-only PII scan. Returns (found, redacted_text). ~0 ms."""
+    redacted = text
+    redacted = _PII_EMAIL_RE.sub("[EMAIL REDACTED]", redacted)
+    redacted = _PII_PHONE_RE.sub("[PHONE REDACTED]", redacted)
+    redacted = _PII_SSN_RE.sub("[SSN REDACTED]", redacted)
+    redacted = _PII_CC_RE.sub("[CARD REDACTED]", redacted)
+    return redacted != text, redacted
+
+
+def validate_output(
+    response_text: str,
+    use_llm_pii: bool = True,
+) -> tuple[bool, list[str], str]:
+    """Validate LLM output for PII and JSON correctness.
+
+    Guard 1 — PII Redaction (two modes):
+      • use_llm_pii=True  → full LLM guard (catches contextual PII).
+                            Use for free-text LLM responses where human names /
+                            addresses may appear.
+      • use_llm_pii=False → regex-only fast path (~0 ms, no network call).
+                            Safe for warehouse SQL results (prices, quantities,
+                            product names) where LLM PII scan is overkill.
+
+    Guard 2 — JSON Format Check (no LLM, always runs if output looks like JSON).
 
     Returns (is_clean, list_of_issues, cleaned_text).
-    cleaned_text always contains the safe-to-use output (PII redacted if found).
     """
     issues: list[str] = []
     cleaned = response_text or ""
 
     # ── Guard 1: PII Redaction ────────────────────────────────────────────
-    pii = _get_pii_guard()
-    if pii:
-        try:
-            result = pii.validate(cleaned)
-            # FIX action: validated_output is always set (redacted or original)
-            if result.validated_output is not None:
-                if result.validated_output != cleaned:
-                    issues.append("PII detected in output — redacted by guardrails")
-                    log.warning("pii_redacted_in_output")
-                cleaned = result.validated_output
-        except Exception as exc:
-            log.debug("guardrails_pii_validate_error", error=str(exc)[:200])
+    if use_llm_pii:
+        pii = _get_pii_guard()
+        if pii:
+            try:
+                result = pii.validate(cleaned)
+                if result.validated_output is not None:
+                    if result.validated_output != cleaned:
+                        issues.append("PII detected in output — redacted by guardrails")
+                        log.warning("pii_redacted_in_output")
+                    cleaned = result.validated_output
+            except Exception as exc:
+                log.debug("guardrails_pii_validate_error", error=str(exc)[:200])
+                # Fall back to regex on LLM guard failure
+                found, cleaned = _regex_pii_check(cleaned)
+                if found:
+                    issues.append("PII detected in output (regex fallback)")
+    else:
+        # Fast path: regex only — used for simple/read results
+        found, cleaned = _regex_pii_check(cleaned)
+        if found:
+            issues.append("PII detected in output (regex)")
+            log.warning("pii_redacted_regex", chars=len(response_text))
 
     # ── Guard 2: JSON Format Check ────────────────────────────────────────
     stripped = cleaned.strip()
@@ -430,7 +465,6 @@ def validate_output(response_text: str) -> tuple[bool, list[str], str]:
         if jguard:
             try:
                 jguard.validate(cleaned)
-                # No exception → valid JSON
             except Exception as exc:
                 msg = str(exc)
                 if "Invalid JSON" in msg or "JSON" in msg.upper():

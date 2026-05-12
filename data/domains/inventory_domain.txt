@@ -1,0 +1,38 @@
+# Warehouse Inventory Domain Knowledge
+
+## Inventory Management Overview
+The inventory system tracks all products stored across warehouse locations. Key concepts:
+
+1. **Quantity On Hand (QOH)**: Physical stock present at a location
+2. **Quantity Reserved**: Stock allocated to pending orders but not yet picked
+3. **Quantity Available**: QOH minus Reserved - what can be sold/promised
+
+## Inventory Transactions
+All inventory movements are tracked via inventory_transaction with types:
+- RECEIPT: Stock coming in from purchase orders
+- PICK: Stock picked for sales order fulfillment
+- TRANSFER: Movement between locations within warehouse
+- ADJUSTMENT: Manual corrections (damage, shrinkage, cycle count)
+- RETURN: Customer returns added back to inventory
+
+## Lot Tracking & Expiry
+- Each inventory record can have a lot_number for traceability
+- Perishable products track expiry_date for FIFO/FEFO picking
+- lot_number is unique per product-location combination
+
+## Reorder Logic
+Products have automatic reorder settings:
+- min_stock_level: Absolute minimum to maintain safety stock
+- reorder_point: Trigger level for new purchase orders
+- reorder_qty: Standard quantity to order when triggered
+
+## Key Queries for Inventory
+- "Show products below reorder point" - inventory needing replenishment
+- "What's the available quantity for SKU X?" - availability check
+- "List expiring inventory in next 30 days" - expiry management
+- "Show stock movement history for product Y" - audit trail
+- "Which locations have product Z?" - stock locator
+
+## Location Hierarchy
+warehouse → zone → location (aisle/rack/shelf/bin)
+Each location has max_weight_kg capacity and is_occupied status.
